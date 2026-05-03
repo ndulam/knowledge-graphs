@@ -9,3 +9,4 @@ sentence-transformers>=2.7.0
 pypdf>=4.0.0
 reportlab>=4.2.0
 snowflake-connector-python>=3.6.0
+pyvis>=0.3.2

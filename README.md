@@ -10,11 +10,16 @@ documents — into a Claude AI agent that answers financial compliance questions
 
 | Capability | Technology | What it enables |
 |---|---|---|
-| Graph pattern detection | Neo4j | Circular flows, blast radius, multi-hop paths |
-| Time-series analytics | Snowflake | Volume trends, anomaly detection, aggregations |
-| Unstructured document RAG | Neo4j vector index + sentence-transformers | Policy rules, thresholds, compliance procedures |
-| Hybrid query routing | Claude (LLM) | Routes questions to the right data source automatically |
-| AI Agent with tool use | Claude tool_use API | Autonomous multi-source reasoning with visible trace |
+| Knowledge graph storage | Neo4j | Customer → Account → Transaction → Advisor relationships |
+| Graph pattern detection | Neo4j Cypher | Circular flows, blast radius, multi-hop paths, risk clusters |
+| Ontology-grounded reasoning | Semantic layer + LLM | Maps raw data to business concepts (HRC, HVT, Circular Movement) |
+| Time-series analytics | Snowflake | Volume trends, Q4 anomaly spikes, country-level exposure |
+| Unstructured document RAG | Neo4j vector index + sentence-transformers | Policy rules, SAR/CTR thresholds, EDD procedures |
+| Hybrid query routing | Claude (LLM classifier) | Auto-routes questions to graph, documents, or both |
+| AI Agent with tool use | Claude tool_use API + ontology | Autonomous multi-source reasoning with ontology-annotated results |
+| Interactive graph visualisation | pyvis | Network diagrams — red HRC nodes, cycle detection, blast radius maps |
+| Guided investigation story mode | Streamlit | 5-step scripted Alice Morgan case for live presentations |
+| One-click setup | `setup_all.py` | Full pipeline from raw data to running UI in one command |
 
 ---
 
@@ -54,10 +59,144 @@ documents — into a Claude AI agent that answers financial compliance questions
 ┌─────────────────────────────────────────────────────────────────────────────┐
 │                        STREAMLIT UI  (localhost:8501)                       │
 │                                                                             │
-│  Tab 1: AI Agent        ← flagship demo — full reasoning trace              │
-│  Tab 2: Explore Concepts← predefined graph queries with LLM explanations    │
+│  Tab 0: Investigation   ← scripted 5-step Alice Morgan case (present mode)  │
+│  Tab 1: AI Agent        ← flagship demo — full reasoning trace + viz        │
+│  Tab 2: Explore Concepts← predefined ontology queries + network graph       │
 │  Tab 3: Ask a Question  ← hybrid router: graph + docs                       │
 └─────────────────────────────────────────────────────────────────────────────┘
+```
+
+---
+
+## Features in Detail
+
+### Knowledge Graph Ontology
+
+The semantic layer (`docs/ontology_semantic_layer.md`) defines 8 business concepts that
+live above the raw data. The ontology flows through the entire stack:
+
+| Where | How it is used |
+|---|---|
+| `docs/ontology_semantic_layer.md` | Authoritative definition — thresholds, rules, patterns |
+| `scripts/generate_data.py` | Synthetic data embeds all 8 fraud scenarios so queries return results |
+| `scripts/run_queries.py` | Each function implements one ontology concept as a Cypher query |
+| `ui/graph_rag.py` — `ONTOLOGY_CONTEXT` | Injected as LLM system prompt so the model knows what HRC means |
+| `ui/agent.py` — `_AGENT_SYSTEM_BASE` | Ontology definitions baked into agent system prompt |
+| `ui/agent.py` — `_annotate_ontology()` | Every graph result row is tagged with ontology flags before Claude sees it |
+
+This means the agent reasons over *labeled semantic concepts*, not anonymous numbers.
+A `risk_score` of `0.92` arrives as `HIGH_RISK_CUSTOMER (risk_score > 0.8 → EDD required)`.
+
+---
+
+### Graph Visualisation
+
+Implemented in `ui/graph_viz.py` using [pyvis](https://pyvis.readthedocs.io/).
+
+- **Explore Concepts tab**: each concept button triggers a companion `VIZ_QUERIES` Cypher
+  that returns Node/Relationship objects (not scalars). pyvis renders an interactive
+  network with physics simulation.
+- **AI Agent tab**: after every `query_graph` tool call, entity IDs are extracted from the
+  result rows and a local subgraph is fetched and rendered.
+- **Investigation tab**: each Neo4j step renders its subgraph inline.
+
+All graphs use the same ontology-driven colour scheme so the audience never needs to
+relearn the legend.
+
+---
+
+### AI Agent — Ontology-Grounded Tool Use
+
+`ui/agent.py` implements a Claude tool-use agentic loop with up to 10 turns.
+
+```
+User question
+    │
+    ▼
+Claude decides which tool(s) to call
+    │
+    ├── query_graph(cypher)       → run_cypher() → _annotate_ontology() → ontology-tagged rows
+    ├── query_analytics(sql)      → Snowflake DictCursor → list[dict]
+    └── search_documents(question)→ semantic_search() → DocumentChunk passages
+    │
+    ▼
+Tool results fed back to Claude (with ontology flags visible)
+    │
+    ▼
+Claude synthesises final answer using ontology language
+```
+
+The agent's system prompt includes the full `ONTOLOGY_CONTEXT` string so Claude knows
+the precise definitions before it generates any Cypher or interprets any results.
+
+---
+
+### Hybrid RAG Pipeline
+
+`ui/graph_rag.py` implements three retrieval modes:
+
+- **`run_graph_rag()`** — generates Cypher from the question (LLM), executes it, then
+  explains the results in plain English using the ontology as grounding context.
+- **`semantic_search()`** — embeds the question with `all-MiniLM-L6-v2` (384-dim),
+  queries the `document_chunks` Neo4j vector index via `db.index.vector.queryNodes()`.
+- **`run_hybrid_rag()`** — runs both, combines results, and produces a single explanation
+  that cites both sources.
+- **`route_query()`** — LLM classifier returns `"structured"` / `"unstructured"` / `"hybrid"`.
+
+Documents are stored as `DocumentChunk` nodes in Neo4j alongside the graph data —
+the vector index lives in the same database as the knowledge graph.
+
+---
+
+### Synthetic Data — 8 Embedded Fraud Scenarios
+
+`scripts/generate_data.py` generates 20 customers, 23 accounts, 30 transactions, and 5
+advisors. Eight scenarios are deliberately embedded so every demo query returns interesting
+results:
+
+| Scenario | What it creates |
+|---|---|
+| Circular 3-hop ring | A008 → A009 → A010 → A008 |
+| Structuring / smurfing | A011 receives $28k, fans out to 3 payments below $10k |
+| Risk contagion | Low-risk C006/C007 transact with HRC C001/C002 |
+| Hub account | A012: 3 inbound + 2 outbound connections |
+| Risk cluster | C001 (0.95) ↔ C002 (0.91) ↔ C003 (0.87) — all interconnected |
+| Advisor concentration | John Miller manages 4 HRC clients (100% of portfolio) |
+| Blast radius | C001 (0.95) → 3 destination accounts in one hop |
+| HRC Q4 volume spike | High-risk customers show 2.5×–6× volume increase in Oct–Dec 2025 (Snowflake only) |
+
+---
+
+### Project File Map
+
+```
+scripts/
+  setup_all.py          ← one-click pipeline runner with connection checks
+  generate_data.py      ← synthetic CSV data with 8 fraud scenarios
+  create_schema.py      ← Neo4j uniqueness constraints
+  load_to_neo4j.py      ← loads nodes and relationships via MERGE
+  generate_pdfs.py      ← creates 3 compliance PDFs using reportlab
+  ingest_pdfs.py        ← chunks, embeds, stores as DocumentChunk nodes
+  load_to_snowflake.py  ← loads CSVs + generates MONTHLY_TX_SUMMARY time-series
+  run_queries.py        ← runs the 4 ontology concept queries directly
+
+ui/
+  app.py                ← Streamlit UI (4 tabs)
+  graph_rag.py          ← GraphRAG, hybrid routing, semantic search, ONTOLOGY_CONTEXT
+  agent.py              ← Claude tool-use agent, ontology annotation, Snowflake connector
+  graph_viz.py          ← pyvis network visualisation, VIZ_QUERIES, colour legend
+
+docs/
+  ontology_semantic_layer.md  ← authoritative semantic layer definition
+  graph_model.md              ← graph schema documentation
+
+cypher/
+  schema.cypher         ← uniqueness constraints
+  queries.cypher        ← all demo Cypher queries in one file
+
+data/
+  customers.csv / accounts.csv / transactions.csv / advisors.csv
+  pdfs/                 ← aml_policy.pdf, customer_risk_framework.pdf, advisor_compliance_guide.pdf
 ```
 
 ---
@@ -74,6 +213,39 @@ documents — into a Claude AI agent that answers financial compliance questions
 ---
 
 ## End-to-End Setup
+
+### Quick path (recommended)
+
+After completing Steps 1–4 (clone, install, configure `.env`, start Docker), run the full
+pipeline in one command:
+
+```bash
+python scripts/setup_all.py
+```
+
+This runs all six pipeline steps in order — generate data, create schema, load Neo4j,
+generate PDFs, ingest PDFs, load Snowflake — with colour-coded progress output and
+connection pre-checks. Then:
+
+```bash
+streamlit run ui/app.py
+```
+
+To validate connections without loading data:
+
+```bash
+python scripts/setup_all.py --check-only
+```
+
+To skip Snowflake (if you don't have an account):
+
+```bash
+python scripts/setup_all.py --skip-snowflake
+```
+
+---
+
+### Manual steps (if you prefer step-by-step control)
 
 ### Step 1 — Clone and create virtual environment
 
@@ -222,39 +394,120 @@ pytest
 
 ## UI Tabs
 
-### Tab 1 — AI Agent (flagship demo)
+### Tab 0 — 🕵️ Investigation (Guided Story Mode)
 
-A Claude agent with three tools autonomously decides what to query and synthesises a
-grounded answer. The UI shows the full reasoning trace — every tool call, its input
-(Cypher or SQL), and its output — before the final answer.
+A scripted 5-step investigation of **Alice Morgan (C001)** — designed for live presentations
+to audiences without deep technical backgrounds. Each step is a button; results build up
+sequentially so a presenter can pause and explain before moving on.
+
+| Step | Data Source | What it shows |
+|---|---|---|
+| 1 — Identify the Subject | Neo4j | Alice's risk score (0.95), accounts, advisor as a network diagram |
+| 2 — Follow the Money | Neo4j | All her transactions; HIGH_VALUE_TXN nodes highlighted orange |
+| 3 — Check for Circular Flows | Neo4j | The A001→A002→…→A001 cycle visualised as a visible loop |
+| 4 — Volume Trend Analysis | Snowflake | Line chart showing a 6× outgoing volume spike in December 2025 |
+| 5 — Compliance Obligations | Documents | Policy excerpts: EDD threshold, SAR obligation, advisor escalation rules |
+
+Every step shows:
+- **The data** (table or chart)
+- **The network graph** (for Neo4j steps) — coloured by ontology concept
+- **"What this means"** — plain-English insight for the audience
+- **"Why the graph"** — one sentence on what the graph uniquely contributes vs. SQL
+
+When all 5 steps are complete, a summary banner states the conclusion:
+> *No single data source could have produced this — it took the knowledge graph, the data warehouse, and the compliance documents together.*
+
+Controls: **Run each step individually** (for a paced presentation) or **Run all steps** button for a rapid full demo. **Reset investigation** clears all results.
+
+---
+
+### Tab 1 — 🤖 AI Agent (Flagship Demo)
+
+A Claude agent with three tools that autonomously decides what to query, in what order,
+and synthesises a grounded answer. The UI shows the complete reasoning trace — every
+tool call with its Cypher or SQL input, the raw results, and the ontology concepts that
+were triggered.
+
+**Three tools:**
+
+| Tool | Data source | Used for |
+|---|---|---|
+| `query_graph` | Neo4j | WHO is connected, circular flows, blast radius, multi-hop paths |
+| `query_analytics` | Snowflake | HOW MUCH, WHEN — volume trends, time-series, aggregations |
+| `search_documents` | Neo4j vector index | WHAT rules say — SAR thresholds, EDD criteria, advisor limits |
+
+**Ontology grounding:** Every graph result is automatically annotated with ontology flags
+before being returned to the agent:
+- `HIGH_RISK_CUSTOMER (risk_score > 0.8 → EDD required)`
+- `HIGH_VALUE_TXN (amount > $10,000 → CTR filing threshold)`
+- `CIRCULAR_MOVEMENT (A→B→A cycle detected → fraud indicator)`
+- `ADVISOR_RISK_EXPOSURE (N HIGH_RISK_CUSTOMER(s) in portfolio)`
+
+These flags appear in the UI under each graph result table so the audience can see the
+ontology translating raw numbers into compliance obligations.
+
+**Network visualisation:** After every `query_graph` tool call, an interactive pyvis
+network diagram appears inline showing the entities involved, coloured by ontology concept.
 
 **Try the SAR question first:**
-> "Should we file a SAR for Alice Morgan?"
+> *"Should we file a SAR for Alice Morgan?"*
 
-The agent will call all three tools in sequence:
-1. `search_documents` → learns SAR triggers from AML policy
-2. `query_graph` → finds Alice's risk score (0.95) and her network connections
-3. `query_analytics` → finds her Dec-2025 volume is 6× her baseline
+Expected tool sequence:
+1. `search_documents` → retrieves SAR trigger rules from `aml_policy.pdf`
+2. `query_graph` → finds Alice (risk 0.95, `HIGH_RISK_CUSTOMER`) and her circular ring
+3. `query_analytics` → confirms Dec-2025 outgoing volume is 6× January baseline
 
-This is the question that **cannot be answered by any single data source**.
+This question **cannot be answered by any single source** — that is the point of the demo.
 
-### Tab 2 — Explore Concepts
+---
 
-Five predefined graph queries with LLM explanations grounded in the ontology:
-- High-Risk Customers
-- High-Value Transactions
-- Circular Money Movements
-- Advisor Risk Exposure
-- Multi-Hop Customer Exposure
+### Tab 2 — 🔍 Explore Concepts (Predefined Graph Queries)
 
-No API key needed to retrieve data. API key needed for LLM explanation.
+Six predefined graph queries — one per ontology concept — with LLM explanations grounded
+in the semantic layer. Each query is selected by clicking a button; results appear
+immediately in two columns (data + explanation) followed by a full-width interactive
+network graph.
 
-### Tab 3 — Ask a Question
+| Concept | What it detects | Key ontology rule |
+|---|---|---|
+| High-Risk Customers | Customers with risk_score > 0.8 | `HIGH_RISK_CUSTOMER` → EDD required |
+| High-Value Transactions | Transactions > $10,000 | `HIGH_VALUE_TXN` → CTR threshold |
+| Circular Money Movements | A→B→A transaction cycles | `CIRCULAR_MOVEMENT` → fraud indicator |
+| Advisor Risk Exposure | Advisors managing HRC clients | `ADVISOR_RISK_EXPOSURE` → portfolio review |
+| Multi-Hop Customer Exposure | Customers within 2 hops of HRC | Risk contagion path |
+| High-Risk Network | Full HRC subgraph with transactions | Risk cluster map |
 
-Free-form hybrid questions. The system routes to:
-- `structured` — Neo4j (questions about live data: customers, transactions, accounts)
-- `unstructured` — Documents (questions about policies, rules, thresholds)
-- `hybrid` — Both (compliance questions about specific data)
+**No API key needed** to retrieve data and see the graph visualisation.
+API key needed only for the LLM explanation column.
+
+**Graph visualisation colour legend:**
+- 🔴 Red — `HIGH_RISK_CUSTOMER` (risk > 0.8)
+- 🟠 Orange — `HIGH_VALUE_TXN` (amount > $10,000)
+- 🟢 Green — normal Transaction
+- 🔵 Blue — normal Customer
+- ⚫ Grey — Account
+- 🟣 Purple — Advisor
+
+Hover over any node to see full details: name, risk score, country, ontology flag with
+its compliance implication. Drag nodes to rearrange; scroll to zoom.
+
+---
+
+### Tab 3 — 💬 Ask a Question (Hybrid RAG)
+
+Free-form question input with automatic routing. A Claude classifier reads the question
+and decides which data source to use:
+
+| Route | Trigger | Sources queried |
+|---|---|---|
+| `structured` | Questions about live data — customers, accounts, transactions | Neo4j only |
+| `unstructured` | Questions about rules, thresholds, definitions, procedures | Documents only |
+| `hybrid` | Compliance questions that need both data and policy context | Neo4j + Documents |
+
+The system then runs the appropriate retrieval, generates or uses a provided Cypher query,
+and produces an LLM explanation grounded in the ontology context.
+
+You can optionally provide your own Cypher query — leave blank for auto-generation.
 
 ---
 
