@@ -484,7 +484,9 @@ with tab_agent:
                     )
                     embedder = _load_embedder()
                     agent    = FinancialAgent(
-                        neo4j_driver, sf_conn, embedder, api_key, model
+                        neo4j_driver, sf_conn, embedder,
+                        api_key, model,
+                        provider=provider_name,
                     )
                     result = agent.run(q)
                     neo4j_driver.close()

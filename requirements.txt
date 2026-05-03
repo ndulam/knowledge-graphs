@@ -3,11 +3,20 @@ pandas>=2.0.0
 python-dotenv>=1.0.0
 pytest>=8.0.0
 streamlit>=1.35.0
+# LLM providers (direct API — used by graph_rag.py hybrid RAG tab)
 anthropic>=0.40.0
 openai>=1.30.0
+# LangGraph agent (provider-agnostic tool-use loop)
+langgraph>=0.2.0
+langchain-core>=0.3.0
+langchain-anthropic>=0.3.0
+langchain-openai>=0.2.0
+# Embeddings and document ingestion
 sentence-transformers>=2.7.0
 pypdf>=4.0.0
 reportlab>=4.2.0
+# Data warehouse
 snowflake-connector-python>=3.6.0
+# Graph visualisation
 pyvis>=0.3.2
 torchvision
