@@ -18,7 +18,10 @@
       "Bash(../.venv/Scripts/python.exe -c \"from graph_viz import viz_from_neo4j, render_network, VIZ_QUERIES, LEGEND_HTML, extract_ids_from_rows, viz_from_entity_ids; print\\('graph_viz OK'\\); print\\(list\\(VIZ_QUERIES.keys\\(\\)\\)\\)\")",
       "Bash(../.venv/Scripts/python.exe -m py_compile app.py)",
       "Bash(.venv/Scripts/python.exe -m py_compile scripts/setup_all.py)",
-      "Bash(.venv/Scripts/python.exe scripts/setup_all.py --help)"
+      "Bash(.venv/Scripts/python.exe scripts/setup_all.py --help)",
+      "Bash(../.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(.venv/Scripts/pip.exe show *)"
     ]
   }
 }
