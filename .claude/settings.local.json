@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/pip install *)",
+      "Bash(uv pip *)",
+      "Bash(.venv/Scripts/python.exe -m pytest tests/ -v)",
+      "Bash(.venv/Scripts/python.exe scripts/generate_data.py)",
+      "Skill(claude-api)",
+      "Bash(.venv\\\\Scripts\\\\python.exe scripts/generate_pdfs.py)",
+      "PowerShell(cd \"D:\\\\Data\\\\Cloud & AI\\\\CODE-PROJECTS\\\\knowledge-graph-kickstart\"; foreach \\($f in @\\('ui/agent.py','ui/app.py','scripts/load_to_snowflake.py'\\)\\) { .\\\\.venv\\\\Scripts\\\\python.exe -c \"import ast,sys; ast.parse\\(open\\('$f',encoding='utf-8'\\).read\\(\\)\\); print\\('OK: $f'\\)\" 2>&1 })",
+      "PowerShell(cd \"D:\\\\Data\\\\Cloud & AI\\\\CODE-PROJECTS\\\\knowledge-graph-kickstart\"; \\(Get-Content README.md\\).Count; Write-Host \"---\"; Select-String \"^## \" README.md | ForEach-Object { $_.Line })",
+      "PowerShell(cd \"D:\\\\Data\\\\Cloud & AI\\\\CODE-PROJECTS\\\\knowledge-graph-kickstart\"; \\(Get-Content README.md\\).Count; Select-String \"^## \" README.md | ForEach-Object { $_.Line })"
+    ]
+  }
+}

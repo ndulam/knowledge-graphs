@@ -1,0 +1,21 @@
+customer_id,name,risk_score,country
+C001,Alice Morgan,0.95,US
+C002,Bob Carter,0.91,UK
+C003,Charlie Ross,0.87,SG
+C004,Diana Blake,0.85,DE
+C005,Ethan Hunt,0.82,FR
+C006,Fiona Green,0.22,AU
+C007,George Hall,0.18,CA
+C008,Hannah Park,0.55,JP
+C009,Ivan Cruz,0.48,BR
+C010,Julia Stone,0.61,IN
+C011,Kevin White,0.72,US
+C012,Laura Kim,0.44,SG
+C013,Kevin Smith,0.12,AU
+C014,Diana Lee,0.19,UK
+C015,Kevin Thomas,0.68,UK
+C016,Julia Wilson,0.12,UK
+C017,Diana Lee,0.43,US
+C018,Ivan Lee,0.57,JP
+C019,George Lee,0.39,AU
+C020,Marcus White,0.1,IN
