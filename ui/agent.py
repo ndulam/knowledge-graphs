@@ -232,7 +232,7 @@ class FinancialAgent:
         tools   = make_tools(self._neo4j, self._sf, self._embedder, self._sf_ok)
         prompt  = _system_prompt(sf_available=self._sf_ok)
 
-        graph   = create_react_agent(llm, tools, state_modifier=prompt)
+        graph   = create_react_agent(llm, tools, prompt=prompt)
         output  = graph.invoke({"messages": [HumanMessage(content=question)]})
 
         steps, answer = self._parse_output(output)
