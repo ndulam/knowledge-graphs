@@ -15,8 +15,8 @@ documents — into a Claude AI agent that answers financial compliance questions
 | Ontology-grounded reasoning | Semantic layer + LLM | Maps raw data to business concepts (HRC, HVT, Circular Movement) |
 | Time-series analytics | Snowflake | Volume trends, Q4 anomaly spikes, country-level exposure |
 | Unstructured document RAG | Neo4j vector index + sentence-transformers | Policy rules, SAR/CTR thresholds, EDD procedures |
-| Hybrid query routing | Claude (LLM classifier) | Auto-routes questions to graph, documents, or both |
-| AI Agent with tool use | Claude tool_use API + ontology | Autonomous multi-source reasoning with ontology-annotated results |
+| Hybrid query routing | LLM classifier (Anthropic or OpenAI) | Auto-routes questions to graph, documents, or both |
+| AI Agent with tool use | LangGraph + LangChain (provider-agnostic) | Autonomous multi-source reasoning with ontology-annotated results |
 | Interactive graph visualisation | pyvis | Network diagrams — red HRC nodes, cycle detection, blast radius maps |
 | Guided investigation story mode | Streamlit | 5-step scripted Alice Morgan case for live presentations |
 | One-click setup | `setup_all.py` | Full pipeline from raw data to running UI in one command |
@@ -48,8 +48,9 @@ documents — into a Claude AI agent that answers financial compliance questions
             │                   │                           │
             ▼                   ▼                           ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                        CLAUDE AI AGENT                                      │
+│              LangGraph ReAct Agent  (provider-agnostic)                     │
 │                                                                             │
+│   Model: Claude (Anthropic) or GPT-4o (OpenAI) — switchable in sidebar     │
 │   User question ──► Agent reasons ──► calls tool(s) ──► synthesises answer │
 │                                                                             │
 │   Tools:  query_graph (Cypher)  ·  query_analytics (SQL)  ·  search_docs   │
@@ -105,29 +106,60 @@ relearn the legend.
 
 ---
 
-### AI Agent — Ontology-Grounded Tool Use
+### AI Agent — LangGraph + Provider-Agnostic Model
 
-`ui/agent.py` implements a Claude tool-use agentic loop with up to 10 turns.
+`ui/agent.py` implements a **LangGraph ReAct agent** using `create_react_agent` from
+`langgraph.prebuilt`. The model backend is fully configurable — switch between Claude
+and GPT-4o from the UI sidebar with no code changes.
+
+**How provider switching works:**
+
+```python
+# ui/agent.py — build_llm()
+if provider == "Anthropic":
+    return ChatAnthropic(model=model, api_key=api_key)   # langchain-anthropic
+if provider == "OpenAI":
+    return ChatOpenAI(model=model, api_key=api_key)      # langchain-openai
+```
+
+Both return a `BaseChatModel` — LangGraph calls the same tool-use loop regardless of
+which provider is chosen. Adding a new provider (Bedrock, Azure OpenAI, Gemini) is one
+`elif` and one `langchain-*` package.
+
+**LangGraph agent loop:**
 
 ```
 User question
     │
     ▼
-Claude decides which tool(s) to call
-    │
-    ├── query_graph(cypher)       → run_cypher() → _annotate_ontology() → ontology-tagged rows
-    ├── query_analytics(sql)      → Snowflake DictCursor → list[dict]
-    └── search_documents(question)→ semantic_search() → DocumentChunk passages
+LangGraph create_react_agent (LLM + tools + ontology system prompt)
     │
     ▼
-Tool results fed back to Claude (with ontology flags visible)
+LLM decides which tool(s) to call
+    │
+    ├── query_graph(cypher, reason)        → run_cypher() → _annotate_ontology() → ontology-tagged rows
+    ├── query_analytics(sql, reason)       → Snowflake DictCursor → list[dict]
+    └── search_documents(question)         → semantic_search() → DocumentChunk passages
     │
     ▼
-Claude synthesises final answer using ontology language
+Tool results (AIMessage / ToolMessage pairs) returned to LangGraph
+    │
+    ▼
+LLM synthesises final answer using ontology language
+    │
+    ▼
+_parse_output() converts LangGraph messages → AgentStep list + answer string
 ```
 
-The agent's system prompt includes the full `ONTOLOGY_CONTEXT` string so Claude knows
-the precise definitions before it generates any Cypher or interprets any results.
+**Tools are LangChain `@tool` functions** built by a factory (`make_tools()`) that
+injects `neo4j_driver`, `sf_conn`, and `embedder` via closure — no global state.
+`Annotated` type hints on each parameter auto-generate the JSON tool schema the model
+receives.
+
+**Ontology grounding:** The full `ONTOLOGY_CONTEXT` string is injected as the agent's
+system prompt via the `prompt=` parameter of `create_react_agent`. Every graph result
+row is annotated with semantic flags by `_annotate_ontology()` before the LLM sees it,
+so the model reasons over labeled concepts, not raw numbers.
 
 ---
 
@@ -183,7 +215,7 @@ scripts/
 ui/
   app.py                ← Streamlit UI (4 tabs)
   graph_rag.py          ← GraphRAG, hybrid routing, semantic search, ONTOLOGY_CONTEXT
-  agent.py              ← Claude tool-use agent, ontology annotation, Snowflake connector
+  agent.py              ← LangGraph ReAct agent (provider-agnostic), build_llm(), make_tools(), ontology annotation
   graph_viz.py          ← pyvis network visualisation, VIZ_QUERIES, colour legend
 
 docs/
@@ -207,7 +239,7 @@ data/
 |---|---|
 | Python 3.11+ | `python --version` to check |
 | Docker + Docker Compose | Runs Neo4j locally |
-| Anthropic or OpenAI API key | For LLM explanations and agent reasoning |
+| Anthropic **or** OpenAI API key | Agent works with either — select provider in the sidebar |
 | Snowflake account (optional) | Free 30-day trial at [snowflake.com/try](https://signup.snowflake.com/) — needed for AI Agent analytics tool |
 
 ---
@@ -423,10 +455,10 @@ Controls: **Run each step individually** (for a paced presentation) or **Run all
 
 ### Tab 1 — 🤖 AI Agent (Flagship Demo)
 
-A Claude agent with three tools that autonomously decides what to query, in what order,
-and synthesises a grounded answer. The UI shows the complete reasoning trace — every
-tool call with its Cypher or SQL input, the raw results, and the ontology concepts that
-were triggered.
+A **LangGraph ReAct agent** backed by a configurable LLM (Claude or GPT-4o — select in
+the sidebar) that autonomously decides what to query, in what order, and synthesises a
+grounded answer. The UI shows the complete reasoning trace — every tool call with its
+Cypher or SQL input, the raw results, and the ontology concepts that were triggered.
 
 **Three tools:**
 
@@ -495,8 +527,8 @@ its compliance implication. Drag nodes to rearrange; scroll to zoom.
 
 ### Tab 3 — 💬 Ask a Question (Hybrid RAG)
 
-Free-form question input with automatic routing. A Claude classifier reads the question
-and decides which data source to use:
+Free-form question input with automatic routing. The selected LLM (Claude or GPT-4o)
+classifies the question and decides which data source to use:
 
 | Route | Trigger | Sources queried |
 |---|---|---|
