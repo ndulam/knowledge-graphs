@@ -12,7 +12,7 @@ documents — into a Claude AI agent that answers financial compliance questions
 |---|---|---|
 | Knowledge graph storage | Neo4j | Customer → Account → Transaction → Advisor relationships |
 | Graph pattern detection | Neo4j Cypher | Circular flows, blast radius, multi-hop paths, risk clusters |
-| Ontology-grounded reasoning | Semantic layer + LLM | Maps raw data to business concepts (HRC, HVT, Circular Movement) |
+| Ontology-grounded reasoning | Semantic layer + LLM | Maps raw data to 10 business concepts (HRC, HVT, Layering, Money Mule, Velocity Anomaly, …) |
 | Time-series analytics | Snowflake | Volume trends, Q4 anomaly spikes, country-level exposure |
 | Unstructured document RAG | Neo4j vector index + sentence-transformers | Policy rules, SAR/CTR thresholds, EDD procedures |
 | Hybrid query routing | LLM classifier (Anthropic or OpenAI) | Auto-routes questions to graph, documents, or both |
@@ -73,7 +73,7 @@ documents — into a Claude AI agent that answers financial compliance questions
 
 ### Knowledge Graph Ontology
 
-The semantic layer (`docs/ontology_semantic_layer.md`) defines 8 business concepts that
+The semantic layer (`docs/ontology_semantic_layer.md`) defines 10 business concepts that
 live above the raw data. The ontology flows through the entire stack:
 
 | Where | How it is used |
@@ -180,22 +180,25 @@ the vector index lives in the same database as the knowledge graph.
 
 ---
 
-### Synthetic Data — 8 Embedded Fraud Scenarios
+### Synthetic Data — 11 Embedded Fraud Scenarios
 
-`scripts/generate_data.py` generates 20 customers, 23 accounts, 30 transactions, and 5
-advisors. Eight scenarios are deliberately embedded so every demo query returns interesting
+`scripts/generate_data.py` generates 20 customers, 27 accounts, 30 transactions, and 5
+advisors. Eleven scenarios are deliberately embedded so every demo query returns interesting
 results:
 
-| Scenario | What it creates |
-|---|---|
-| Circular 3-hop ring | A008 → A009 → A010 → A008 |
-| Structuring / smurfing | A011 receives $28k, fans out to 3 payments below $10k |
-| Risk contagion | Low-risk C006/C007 transact with HRC C001/C002 |
-| Hub account | A012: 3 inbound + 2 outbound connections |
-| Risk cluster | C001 (0.95) ↔ C002 (0.91) ↔ C003 (0.87) — all interconnected |
-| Advisor concentration | John Miller manages 4 HRC clients (100% of portfolio) |
-| Blast radius | C001 (0.95) → 3 destination accounts in one hop |
-| HRC Q4 volume spike | High-risk customers show 2.5×–6× volume increase in Oct–Dec 2025 (Snowflake only) |
+| Scenario | What it creates | Key accounts |
+|---|---|---|
+| Circular 3-hop ring | A008 → A009 → A010 → A008 (3-hop cycle) | A008-A010 |
+| Structuring / smurfing | A011 receives $28k, fans out to 3 payments avg $2.6k | A011 |
+| Risk contagion | Low-risk C006/C007 transact directly with HRC C001/C002 | A006-A007 |
+| Hub account | A012: 3 inbound + 2 outbound connections | A012 |
+| Risk cluster | C001 (0.95) ↔ C002 (0.91) ↔ C003 (0.87) — all interconnected | A001-A003 |
+| Advisor concentration | John Miller manages 4 HRC clients (100% of portfolio) | AD001 |
+| Blast radius | C001 (0.95) → 3 destination accounts in one hop | A001 |
+| Layering chain | A001→A013→A014→A015→A003, $50k declining 5% per hop | A013-A015 |
+| Velocity anomaly | A002 fires 5 outgoing transactions in 72 minutes on Jan 2 | A002 |
+| Money mule | A016 receives $30k, immediately forwards 95% ($28.5k) | A016 |
+| HRC Q4 volume spike | High-risk customers show 2.5×–6× volume increase in Q4 (Snowflake only) | — |
 
 ---
 
@@ -210,7 +213,7 @@ scripts/
   generate_pdfs.py      ← creates 3 compliance PDFs using reportlab
   ingest_pdfs.py        ← chunks, embeds, stores as DocumentChunk nodes
   load_to_snowflake.py  ← loads CSVs + generates MONTHLY_TX_SUMMARY time-series
-  run_queries.py        ← runs the 4 ontology concept queries directly
+  run_queries.py        ← runs all 11 ontology concept queries directly
 
 ui/
   app.py                ← Streamlit UI (4 tabs)

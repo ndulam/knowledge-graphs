@@ -24,10 +24,17 @@ Relationships:
 - (:Advisor)-[:MANAGES]->(:Customer)
 
 SEMANTIC ONTOLOGY — business concepts encoded in the graph
-- High Risk Customer    : Customer where risk_score > 0.8
-- High Value Transaction: Transaction where amount > $10,000
-- Circular Money Movement: Account A sends funds to Account B, which sends them back to Account A — a fraud indicator
-- Advisor Risk Exposure : An advisor managing one or more high-risk customers, representing concentrated portfolio risk
+- High Risk Customer         : Customer where risk_score > 0.8 — triggers Enhanced Due Diligence (EDD)
+- Critical Risk Customer     : Customer where risk_score > 0.9 — immediate CCO escalation required
+- High Value Transaction     : Transaction where amount > $10,000 — CTR filing threshold
+- Circular Money Movement    : Account A sends to Account B which sends back to Account A — layering indicator
+- Advisor Risk Exposure      : Advisor managing one or more HIGH_RISK_CUSTOMERs — concentrated portfolio risk
+- Structuring (Smurfing)     : Account receives large inflow (>$10k) then fans out to ≥3 outflows averaging <$5k — deliberate CTR avoidance
+- Layering                   : Transaction chain of 3+ hops through different accounts with declining amounts — obscures money trail
+- Velocity Anomaly           : Account fires 3+ outgoing transactions within the same calendar day — burst-firing pattern
+- Geographic Concentration Risk: High-risk customer (>0.70) transacting cross-border across multiple jurisdictions — regulatory exposure
+- Money Mule                 : Account that forwards ≥85% of received funds to a different account — pass-through conduit for illicit flows
+- Advisor Network Contagion  : Advisor's low-risk client (≤0.80) directly transacting with a HIGH_RISK_CUSTOMER — indirect portfolio contamination
 
 YOUR TASK
 Given a business question, the Cypher query executed against the graph, and its results, explain what
@@ -85,6 +92,104 @@ PREDEFINED_QUERIES: dict[str, dict[str, str]] = {
             "ORDER BY shared_transactions DESC"
         ),
         "question": "Which customers are connected through shared transaction flows?",
+    },
+    "structuring": {
+        "label": "Structuring (Smurfing)",
+        "cypher": (
+            "MATCH (a_in:Account)-[:SENT]->(inflow:Transaction)-[:TO]->(hub:Account) "
+            "WITH hub, sum(inflow.amount) AS total_in "
+            "MATCH (hub)-[:SENT]->(outflow:Transaction)-[:TO]->(a_out:Account) "
+            "WITH hub, total_in, collect(outflow.amount) AS out_amounts "
+            "WHERE total_in > 10000 AND size(out_amounts) >= 3 "
+            "WITH hub, total_in, out_amounts, "
+            "     reduce(s=0.0, x IN out_amounts | s+x) / size(out_amounts) AS avg_out "
+            "WHERE avg_out < 5000 "
+            "OPTIONAL MATCH (c:Customer)-[:OWNS]->(hub) "
+            "RETURN hub.id AS hub_account, c.name AS owner, c.risk_score AS risk_score, "
+            "       round(total_in) AS total_inflow, size(out_amounts) AS outflow_count, "
+            "       round(avg_out) AS avg_outflow "
+            "ORDER BY total_inflow DESC"
+        ),
+        "question": "Which accounts show structuring patterns — large inflows fanned out as multiple small payments to avoid CTR reporting?",
+    },
+    "layering": {
+        "label": "Layering Chain",
+        "cypher": (
+            "MATCH (a1:Account)-[:SENT]->(t1:Transaction)-[:TO]->(a2:Account) "
+            "      -[:SENT]->(t2:Transaction)-[:TO]->(a3:Account) "
+            "      -[:SENT]->(t3:Transaction)-[:TO]->(a4:Account) "
+            "WHERE a1 <> a3 AND a2 <> a4 AND a1 <> a4 "
+            "  AND t2.amount < t1.amount AND t3.amount < t2.amount "
+            "OPTIONAL MATCH (c1:Customer)-[:OWNS]->(a1) "
+            "OPTIONAL MATCH (c4:Customer)-[:OWNS]->(a4) "
+            "RETURN a1.id AS hop_1, a2.id AS hop_2, a3.id AS hop_3, a4.id AS hop_4, "
+            "       t1.amount AS amount_1, t2.amount AS amount_2, t3.amount AS amount_3, "
+            "       c1.name AS origin_owner, c4.name AS final_owner "
+            "ORDER BY amount_1 DESC LIMIT 10"
+        ),
+        "question": "Are there multi-hop transaction chains with declining amounts that suggest money layering to obscure the source of funds?",
+    },
+    "velocity_anomaly": {
+        "label": "Velocity Anomaly",
+        "cypher": (
+            "MATCH (a:Account)-[:SENT]->(t:Transaction) "
+            "WITH a, substring(toString(t.timestamp), 0, 10) AS day, "
+            "     count(t) AS burst_count, sum(t.amount) AS total_amount "
+            "WHERE burst_count >= 3 "
+            "OPTIONAL MATCH (c:Customer)-[:OWNS]->(a) "
+            "RETURN a.id AS account, c.name AS owner, c.risk_score AS risk_score, "
+            "       day, burst_count, round(total_amount) AS total_amount "
+            "ORDER BY burst_count DESC"
+        ),
+        "question": "Which accounts are firing many transactions in a single day — a velocity burst pattern that may indicate structuring or coordinated fraud?",
+    },
+    "geographic_risk": {
+        "label": "Geographic Concentration Risk",
+        "cypher": (
+            "MATCH (c1:Customer)-[:OWNS]->(a1:Account)-[:SENT]->(t:Transaction) "
+            "      -[:TO]->(a2:Account)<-[:OWNS]-(c2:Customer) "
+            "WHERE c1.country <> c2.country "
+            "  AND (c1.risk_score > 0.7 OR c2.risk_score > 0.7) "
+            "RETURN c1.country AS from_country, c2.country AS to_country, "
+            "       count(t) AS txn_count, round(sum(t.amount)) AS total_amount, "
+            "       collect(DISTINCT c1.name)[0..3] AS from_customers, "
+            "       collect(DISTINCT c2.name)[0..3] AS to_customers "
+            "ORDER BY total_amount DESC LIMIT 15"
+        ),
+        "question": "Which country pairs have high-risk customers sending cross-border transactions, indicating geographic concentration risk?",
+    },
+    "money_mule": {
+        "label": "Money Mule",
+        "cypher": (
+            "MATCH (mule:Account) "
+            "WITH mule, "
+            "  [(src:Account)-[:SENT]->(ti:Transaction)-[:TO]->(mule) | ti.amount] AS in_amounts, "
+            "  [(mule)-[:SENT]->(to_t:Transaction)-[:TO]->(dst:Account) | to_t.amount] AS out_amounts "
+            "WHERE size(in_amounts) > 0 AND size(out_amounts) > 0 "
+            "WITH mule, "
+            "  reduce(s=0.0, x IN in_amounts  | s+x) AS total_in, "
+            "  reduce(s=0.0, x IN out_amounts | s+x) AS total_out "
+            "WHERE total_in > 5000 AND (total_out * 1.0 / total_in) >= 0.85 "
+            "OPTIONAL MATCH (c:Customer)-[:OWNS]->(mule) "
+            "RETURN mule.id AS mule_account, c.name AS owner, c.risk_score AS risk_score, "
+            "       round(total_in) AS total_received, round(total_out) AS total_forwarded, "
+            "       round(100.0 * total_out / total_in, 1) AS forward_pct "
+            "ORDER BY forward_pct DESC"
+        ),
+        "question": "Which accounts act as money mules — receiving funds and immediately forwarding 85% or more to a different account?",
+    },
+    "advisor_contagion": {
+        "label": "Advisor Network Contagion",
+        "cypher": (
+            "MATCH (adv:Advisor)-[:MANAGES]->(c:Customer)-[:OWNS]->(a:Account) "
+            "      -[:SENT]->(:Transaction)-[:TO]->(a2:Account)<-[:OWNS]-(c2:Customer) "
+            "WHERE c2.risk_score > 0.8 AND c.risk_score <= 0.8 "
+            "RETURN adv.name AS advisor, c.name AS client, c.risk_score AS client_risk, "
+            "       collect(DISTINCT c2.name) AS hrc_counterparties, "
+            "       count(DISTINCT c2) AS contagion_count "
+            "ORDER BY contagion_count DESC LIMIT 20"
+        ),
+        "question": "Which advisors have low-risk clients who transact directly with high-risk customers, creating indirect portfolio contamination?",
     },
 }
 

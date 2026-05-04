@@ -42,9 +42,14 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
         {"customer_id": "C011", "name": "Kevin White",   "risk_score": 0.72, "country": "US"},
         # Q5: owns the hub account (≥2 inbound sources + ≥2 outbound destinations)
         {"customer_id": "C012", "name": "Laura Kim",     "risk_score": 0.44, "country": "SG"},
+        # Layering chain intermediaries and money mule (new concepts 5-10)
+        {"customer_id": "C013", "name": "Oscar Reed",    "risk_score": 0.35, "country": "SG"},  # layering hop 1
+        {"customer_id": "C014", "name": "Paula Chen",    "risk_score": 0.28, "country": "HK"},  # layering hop 2
+        {"customer_id": "C015", "name": "Quinn Harris",  "risk_score": 0.31, "country": "DE"},  # layering hop 3
+        {"customer_id": "C016", "name": "Rachel Scott",  "risk_score": 0.19, "country": "JP"},  # money mule
     ]
 
-    # Random background customers C013–C020 (capped at 0.75 so Q7 stays clean)
+    # Random background customers C017–C020 (capped at 0.75 so Q7 stays clean)
     random_customers = [
         {
             "customer_id": f"C{i:03d}",
@@ -52,7 +57,7 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
             "risk_score": round(random.uniform(0.10, 0.75), 2),
             "country": random.choice(_COUNTRIES),
         }
-        for i in range(13, n_customers + 1)
+        for i in range(17, n_customers + 1)
     ]
 
     customers = scenario_customers + random_customers
@@ -72,11 +77,15 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
         {"account_id": "A010", "customer_id": "C010", "account_type": "BROKERAGE"},  # ring node 3
         {"account_id": "A011", "customer_id": "C011", "account_type": "CHECKING"},   # smurfing account
         {"account_id": "A012", "customer_id": "C012", "account_type": "SAVINGS"},    # hub account
+        {"account_id": "A013", "customer_id": "C013", "account_type": "CHECKING"},  # layering hop 1
+        {"account_id": "A014", "customer_id": "C014", "account_type": "SAVINGS"},   # layering hop 2
+        {"account_id": "A015", "customer_id": "C015", "account_type": "BROKERAGE"}, # layering hop 3
+        {"account_id": "A016", "customer_id": "C016", "account_type": "CHECKING"},  # money mule
     ]
 
     # One background account per random customer, 30% chance of a second
     random_accounts = []
-    next_acc = 13
+    next_acc = 17
     for cust in random_customers:
         random_accounts.append({
             "account_id": f"A{next_acc:03d}",
@@ -96,9 +105,10 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
     pd.DataFrame(accounts).to_csv(DATA_DIR / "accounts.csv", index=False)
 
     all_account_ids = [a["account_id"] for a in accounts]
-    base_time = datetime(2026, 1, 1, 10, 0, 0)
+    base_time      = datetime(2026, 1, 1, 10, 0, 0)
+    velocity_base  = datetime(2026, 1, 2, 8, 0, 0)   # velocity burst anchor: Jan 2, 08:00
 
-    # ── Scenario transactions T001–T016 (deterministic) ──────────────────────
+    # ── Scenario transactions T001–T027 (deterministic) ──────────────────────
     scenario_transactions = [
         # Q6 + Q8 — high-risk cluster: C001 (0.95) sends large amounts to three other high-risk customers.
         # Q8: blast radius — C001 is the highest-risk node; T001/T002/T003 map its full reach.
@@ -147,6 +157,34 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
          "timestamp": (base_time + timedelta(hours=84)).isoformat()},
         {"txn_id": "T016", "from_account": "A012", "to_account": "A007", "amount": 3800.00,
          "timestamp": (base_time + timedelta(hours=90)).isoformat()},
+
+        # Layering chain: A001→A013→A014→A015→A003 (4-hop, 95% forwarded at each hop)
+        {"txn_id": "T017", "from_account": "A001", "to_account": "A013", "amount": 50000.00,
+         "timestamp": (base_time + timedelta(hours=96)).isoformat()},
+        {"txn_id": "T018", "from_account": "A013", "to_account": "A014", "amount": 47500.00,
+         "timestamp": (base_time + timedelta(hours=102)).isoformat()},
+        {"txn_id": "T019", "from_account": "A014", "to_account": "A015", "amount": 45125.00,
+         "timestamp": (base_time + timedelta(hours=108)).isoformat()},
+        {"txn_id": "T020", "from_account": "A015", "to_account": "A003", "amount": 42869.00,
+         "timestamp": (base_time + timedelta(hours=114)).isoformat()},
+
+        # Velocity anomaly: A002 fires 5 outgoing transactions in 72 minutes (Jan 2, 08:00–09:12)
+        {"txn_id": "T021", "from_account": "A002", "to_account": "A003", "amount": 4500.00,
+         "timestamp": velocity_base.isoformat()},
+        {"txn_id": "T022", "from_account": "A002", "to_account": "A004", "amount": 4800.00,
+         "timestamp": (velocity_base + timedelta(minutes=18)).isoformat()},
+        {"txn_id": "T023", "from_account": "A002", "to_account": "A005", "amount": 4200.00,
+         "timestamp": (velocity_base + timedelta(minutes=36)).isoformat()},
+        {"txn_id": "T024", "from_account": "A002", "to_account": "A006", "amount": 3900.00,
+         "timestamp": (velocity_base + timedelta(minutes=54)).isoformat()},
+        {"txn_id": "T025", "from_account": "A002", "to_account": "A007", "amount": 4100.00,
+         "timestamp": (velocity_base + timedelta(minutes=72)).isoformat()},
+
+        # Money mule: A016 receives $30k from Alice, immediately forwards 95% onward
+        {"txn_id": "T026", "from_account": "A001", "to_account": "A016", "amount": 30000.00,
+         "timestamp": (base_time + timedelta(hours=120)).isoformat()},
+        {"txn_id": "T027", "from_account": "A016", "to_account": "A008", "amount": 28500.00,
+         "timestamp": (base_time + timedelta(hours=121)).isoformat()},
     ]
 
     # Random background transactions to reach n_transactions total
@@ -171,7 +209,7 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
     #   AD001  John Miller   : C001 C002 C003 C004  → 4/4 high-risk (100%)   [Q7]
     #   AD002  Sarah Wilson  : C005 C006 C007 C008  → 1/4 high-risk; C008 owns ring node  [Q4]
     #   AD003  Michael Chen  : C009 C010 C011 C012  → 0/4 high-risk; C009+C010 own ring nodes [Q4]
-    #   AD004  Emily Davis   : C013 C014 C015 C016  → random background
+    #   AD004  Emily Davis   : C013 C014 C015 C016  → layering chain + money mule (new concepts)
     #   AD005  Robert Taylor : C017 C018 C019 C020  → random background
     all_customer_ids = [c["customer_id"] for c in customers]
     advisor_rows = [
@@ -194,6 +232,9 @@ def generate_data(n_customers: int = 20, n_transactions: int = 30, seed: int = 4
     print("  Q6       Risk cluster             C001 (0.95) ↔ C002 (0.91) via T001")
     print("  Q7       Advisor portfolio risk   John Miller: 4/4 clients high-risk (100%)")
     print("  Q8       Blast radius             C001 (0.95) → A001 → T001/T002/T003 → 3 destinations")
+    print("  NEW      Layering chain           A001→A013→A014→A015→A003, $50k declining 5% per hop (T017-T020)")
+    print("  NEW      Velocity anomaly         A002 fires 5 txns in 72 min on Jan 2 (T021-T025)")
+    print("  NEW      Money mule               A016 receives $30k, forwards $28.5k (95%) to A008 (T026-T027)")
 
 
 if __name__ == "__main__":

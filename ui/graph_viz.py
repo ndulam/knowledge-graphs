@@ -72,6 +72,65 @@ VIZ_QUERIES: dict[str, str] = {
         RETURN c, o, a, s, t, to_r, a2, adv, m
         LIMIT 60
     """,
+    "structuring": """
+        MATCH (hub:Account)
+        WHERE hub.id IN ['A011', 'A016']
+        OPTIONAL MATCH (src:Account)-[s_in:SENT]->(t_in:Transaction)-[r_in:TO]->(hub)
+        OPTIONAL MATCH (hub)-[s_out:SENT]->(t_out:Transaction)-[r_out:TO]->(dst:Account)
+        OPTIONAL MATCH (c_hub:Customer)-[o_hub:OWNS]->(hub)
+        OPTIONAL MATCH (c_src:Customer)-[o_src:OWNS]->(src)
+        OPTIONAL MATCH (c_dst:Customer)-[o_dst:OWNS]->(dst)
+        RETURN hub, c_hub, o_hub, src, s_in, t_in, r_in,
+               dst, s_out, t_out, r_out, c_src, o_src, c_dst, o_dst
+    """,
+    "layering": """
+        MATCH (a1:Account)-[s1:SENT]->(t1:Transaction)-[r1:TO]->(a2:Account)
+              -[s2:SENT]->(t2:Transaction)-[r2:TO]->(a3:Account)
+              -[s3:SENT]->(t3:Transaction)-[r3:TO]->(a4:Account)
+        WHERE a1 <> a3 AND a2 <> a4 AND a1 <> a4
+          AND t2.amount < t1.amount AND t3.amount < t2.amount
+        OPTIONAL MATCH (c1:Customer)-[o1:OWNS]->(a1)
+        OPTIONAL MATCH (c4:Customer)-[o4:OWNS]->(a4)
+        RETURN c1, o1, a1, s1, t1, r1, a2, s2, t2, r2, a3, s3, t3, r3, a4, o4, c4
+        LIMIT 15
+    """,
+    "velocity_anomaly": """
+        MATCH (a:Account)-[:SENT]->(t:Transaction)
+        WITH a, substring(toString(t.timestamp), 0, 10) AS day, count(t) AS cnt
+        WHERE cnt >= 3
+        MATCH (a)-[s:SENT]->(t2:Transaction)-[to_r:TO]->(dst:Account)
+        WHERE substring(toString(t2.timestamp), 0, 10) = day
+        OPTIONAL MATCH (c:Customer)-[oc:OWNS]->(a)
+        OPTIONAL MATCH (c2:Customer)-[oc2:OWNS]->(dst)
+        RETURN c, oc, a, s, t2, to_r, dst, oc2, c2
+        LIMIT 60
+    """,
+    "geographic_risk": """
+        MATCH (c1:Customer)-[o1:OWNS]->(a1:Account)-[s:SENT]->(t:Transaction)
+              -[to_r:TO]->(a2:Account)<-[o2:OWNS]-(c2:Customer)
+        WHERE c1.country <> c2.country
+          AND (c1.risk_score > 0.7 OR c2.risk_score > 0.7)
+        RETURN c1, o1, a1, s, t, to_r, a2, o2, c2
+        LIMIT 50
+    """,
+    "money_mule": """
+        MATCH (mule:Account)
+        WHERE mule.id = 'A016'
+        OPTIONAL MATCH (src:Account)-[s_in:SENT]->(t_in:Transaction)-[r_in:TO]->(mule)
+        OPTIONAL MATCH (mule)-[s_out:SENT]->(t_out:Transaction)-[r_out:TO]->(dst:Account)
+        OPTIONAL MATCH (c_mule:Customer)-[o_mule:OWNS]->(mule)
+        OPTIONAL MATCH (c_src:Customer)-[o_src:OWNS]->(src)
+        OPTIONAL MATCH (c_dst:Customer)-[o_dst:OWNS]->(dst)
+        RETURN mule, c_mule, o_mule, src, s_in, t_in, r_in,
+               dst, s_out, t_out, r_out, c_src, o_src, c_dst, o_dst
+    """,
+    "advisor_contagion": """
+        MATCH (adv:Advisor)-[m:MANAGES]->(c:Customer)-[o:OWNS]->(a:Account)
+              -[s:SENT]->(t:Transaction)-[to_r:TO]->(a2:Account)<-[o2:OWNS]-(c2:Customer)
+        WHERE c2.risk_score > 0.8 AND c.risk_score <= 0.8
+        RETURN adv, m, c, o, a, s, t, to_r, a2, o2, c2
+        LIMIT 50
+    """,
 }
 
 # ── Node styling ──────────────────────────────────────────────────────────────

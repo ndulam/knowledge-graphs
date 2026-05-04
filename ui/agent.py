@@ -87,17 +87,57 @@ def _annotate_ontology(row: dict) -> dict:
     risk = row.get("risk_score")
     if risk is not None and float(risk) > 0.8:
         flags.append("HIGH_RISK_CUSTOMER (risk_score > 0.8 -> EDD required)")
+    if risk is not None and float(risk) > 0.9:
+        flags.append("CRITICAL_RISK_CUSTOMER (risk_score > 0.9 -> immediate CCO escalation)")
 
     amount = row.get("amount")
     if amount is not None and float(amount) > 10_000:
         flags.append("HIGH_VALUE_TXN (amount > $10,000 -> CTR filing threshold)")
 
     if "account_a" in row and "account_b" in row:
-        flags.append("CIRCULAR_MOVEMENT (A->B->A cycle detected -> fraud indicator)")
+        flags.append("CIRCULAR_MOVEMENT (A->B->A cycle detected -> layering indicator)")
 
     hrc = row.get("high_risk_count")
     if hrc is not None and int(hrc) > 0:
         flags.append(f"ADVISOR_RISK_EXPOSURE ({hrc} HIGH_RISK_CUSTOMER(s) in portfolio)")
+
+    # Structuring / smurfing
+    total_inflow = row.get("total_inflow") or row.get("total_in")
+    avg_outflow  = row.get("avg_outflow") or row.get("avg_out")
+    outflow_count = row.get("outflow_count")
+    if (total_inflow is not None and float(total_inflow) > 10_000
+            and avg_outflow is not None and float(avg_outflow) < 5_000
+            and outflow_count is not None and int(outflow_count) >= 3):
+        flags.append("STRUCTURING (large inflow + multiple small outflows -> CTR avoidance)")
+
+    # Layering chain
+    if "hop_1" in row and "hop_4" in row:
+        flags.append("LAYERING (3-hop transaction chain with declining amounts -> money trail obfuscation)")
+
+    # Velocity anomaly
+    burst = row.get("burst_count")
+    if burst is not None and int(burst) >= 3:
+        flags.append(f"VELOCITY_ANOMALY ({burst} transactions in one day -> burst-firing pattern)")
+
+    # Geographic concentration risk
+    from_country = row.get("from_country")
+    to_country   = row.get("to_country")
+    if from_country and to_country and from_country != to_country:
+        txn_count = row.get("txn_count", 0)
+        if int(txn_count) > 0:
+            flags.append(f"GEOGRAPHIC_RISK ({from_country}→{to_country} cross-border HRC flow)")
+
+    # Money mule
+    forward_pct = row.get("forward_pct")
+    if forward_pct is not None and float(forward_pct) >= 85:
+        flags.append(f"MONEY_MULE ({forward_pct}% of received funds forwarded -> pass-through conduit)")
+
+    # Advisor network contagion
+    contagion = row.get("contagion_count") or (
+        len(row["hrc_counterparties"]) if isinstance(row.get("hrc_counterparties"), list) else None
+    )
+    if contagion is not None and int(contagion) > 0:
+        flags.append(f"ADVISOR_NETWORK_CONTAGION ({contagion} HRC counterparty contact(s) -> indirect portfolio contamination)")
 
     if flags:
         row = dict(row)
