@@ -12,6 +12,7 @@ import streamlit as st
 from dotenv import load_dotenv
 
 from graph_rag import (
+    ONTOLOGY_CONTEXT,
     PREDEFINED_QUERIES,
     build_neo4j_driver,
     generate_cypher,
@@ -159,8 +160,15 @@ vector index — retrieved by similarity
 st.divider()
 
 # ── Tabs ──────────────────────────────────────────────────────────────────────
-tab_story, tab_agent, tab_explore, tab_custom = st.tabs(
-    ["🕵️ Investigation", "🤖 AI Agent", "🔍 Explore Concepts", "💬 Ask a Question"]
+tab_story, tab_agent, tab_explore, tab_custom, tab_flatvsgraph, tab_aicontext = st.tabs(
+    [
+        "🕵️ Investigation",
+        "🤖 AI Agent",
+        "🔍 Explore Concepts",
+        "💬 Ask a Question",
+        "📊 Flat vs Graph",
+        "🧠 Graph as AI Context",
+    ]
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -271,6 +279,220 @@ _STEPS = [
         "why_graph": "Compliance rules aren't rows in a database — they live in policy documents. Vector search over PDFs retrieves the exact policy text. The knowledge graph architecture connects all three: who (graph) + how much (warehouse) + what the rules say (documents).",
     },
 ]
+
+# ── Flat-vs-Graph tab constants ───────────────────────────────────────────────
+
+_DATA_DIR = Path(__file__).parent.parent / "data"
+
+_FVG_COMPARISONS = [
+    {
+        "id":    "circular_flow",
+        "title": "1. Circular Money Flow (Layering)",
+        "why": (
+            "Circular transactions — money sent out that eventually returns to the sender "
+            "— are the hallmark of **layering**, a key money laundering stage. "
+            "The graph detects this natively as a cycle pattern. SQL must simulate cycles "
+            "with a recursive Common Table Expression that most analysts struggle to write "
+            "correctly, and it still cannot traverse beyond a predefined hop limit."
+        ),
+        "sql_title": "SQL: Recursive CTE Cycle Detection",
+        "sql": """\
+WITH RECURSIVE ring AS (
+  -- anchor: all outgoing transactions from any account
+  SELECT t.from_account AS start_acct,
+         t.to_account   AS current_acct,
+         ARRAY[t.from_account] AS visited,
+         1 AS depth
+  FROM transactions t
+  UNION ALL
+  -- recursive step: follow the money
+  SELECT r.start_acct,
+         t.to_account,
+         r.visited || t.from_account,
+         r.depth + 1
+  FROM transactions t
+  JOIN ring r ON t.from_account = r.current_acct
+  WHERE NOT (t.from_account = ANY(r.visited))
+    AND r.depth < 10                         -- depth guard required
+)
+SELECT DISTINCT start_acct AS account_a,
+                current_acct AS account_b
+FROM ring
+WHERE current_acct = start_acct
+  AND depth >= 2;
+-- 33 lines, recursive syntax (not all DBs support it),
+-- depth guard needed, misses cycles > 10 hops""",
+        "sql_pain": (
+            "**33 lines.** Requires a recursive CTE (not supported by all databases). "
+            "Needs a manual depth guard to prevent infinite loops. "
+            "Still misses cycles longer than 10 hops. Any schema change breaks it."
+        ),
+        "cypher": (
+            "MATCH (a1:Account)-[:SENT]->(:Transaction)-[:TO]->(a2:Account)\n"
+            "      -[:SENT]->(:Transaction)-[:TO]->(a1)\n"
+            "RETURN DISTINCT a1.id AS account_a, a2.id AS account_b"
+        ),
+        "cypher_highlight": "Same answer. **3 lines.** Relationships are first-class — the graph finds cycles natively at any depth.",
+        "viz_cypher_key": "circular_movements",
+    },
+    {
+        "id":    "multihop_exposure",
+        "title": "2. Multi-Hop Customer Exposure",
+        "why": (
+            "Risk is contagious through transaction chains. A low-risk customer who "
+            "regularly transacts with a high-risk customer may be unknowingly exposed "
+            "or complicit. Finding this requires following the money *through* accounts "
+            "to reach customers — exactly what a graph traversal does in a single pattern."
+        ),
+        "sql_title": "SQL: 4-Table JOIN Chain",
+        "sql": """\
+SELECT DISTINCT
+    c1.name  AS customer_a,
+    c2.name  AS customer_b,
+    COUNT(t.txn_id) AS shared_transactions
+FROM customers c1
+JOIN accounts  a1 ON a1.customer_id = c1.customer_id
+JOIN transactions t ON t.from_account = a1.account_id
+JOIN accounts  a2 ON a2.account_id   = t.to_account
+JOIN customers c2 ON c2.customer_id  = a2.customer_id
+WHERE c1.customer_id <> c2.customer_id
+GROUP BY c1.name, c2.name
+ORDER BY shared_transactions DESC;
+-- 4 JOINs, 3 intermediate tables, no relationship semantics,
+-- adding a 3rd hop requires rewriting the entire query""",
+        "sql_pain": (
+            "**4 JOINs across 3 tables.** Adding one more hop (e.g., finding customers "
+            "connected 3 transactions away) requires a complete rewrite. "
+            "The JOIN chain grows linearly with each hop."
+        ),
+        "cypher": (
+            "MATCH (c1:Customer)-[:OWNS]->(a1:Account)\n"
+            "      -[:SENT]->(t:Transaction)\n"
+            "      -[:TO]->(a2:Account)<-[:OWNS]-(c2:Customer)\n"
+            "WHERE c1 <> c2\n"
+            "RETURN c1.name AS customer_a, c2.name AS customer_b,\n"
+            "       count(t) AS shared_transactions\n"
+            "ORDER BY shared_transactions DESC"
+        ),
+        "cypher_highlight": "**7 lines, no JOIN syntax.** Add another hop by extending the pattern — no rewrite needed.",
+        "viz_cypher_key": "customer_exposure",
+    },
+    {
+        "id":    "advisor_blast",
+        "title": "3. Advisor Blast Radius",
+        "why": (
+            "An advisor managing multiple high-risk customers creates concentrated portfolio "
+            "risk. Finding the **total transaction exposure** of each advisor requires "
+            "walking advisor → customers → accounts → transactions. "
+            "SQL needs a GROUP BY aggregation on top of multiple JOINs and a subquery filter."
+        ),
+        "sql_title": "SQL: GROUP BY + Subquery + JOINs",
+        "sql": """\
+SELECT
+    adv.name          AS advisor_name,
+    COUNT(DISTINCT c.customer_id) AS hrc_client_count,
+    SUM(t.amount)     AS total_exposure
+FROM advisors adv
+JOIN customers c  ON c.customer_id = adv.customer_id
+JOIN accounts  a  ON a.customer_id  = c.customer_id
+JOIN transactions t ON t.from_account = a.account_id
+WHERE c.risk_score > 0.8
+GROUP BY adv.name
+ORDER BY total_exposure DESC;
+-- Advisor-customer is denormalised (one row per managed customer),
+-- 3 JOINs, risk filter applied after all joins,
+-- no visibility into which transactions drive the exposure""",
+        "sql_pain": (
+            "The advisor CSV is denormalised (one row per managed customer), requiring "
+            "careful GROUP BY. **3 JOINs**, risk filter applied after joining all tables, "
+            "and there is no way to see which transactions drive the exposure without another subquery."
+        ),
+        "cypher": (
+            "MATCH (adv:Advisor)-[:MANAGES]->(c:Customer)\n"
+            "      -[:OWNS]->(a:Account)-[:SENT]->(t:Transaction)\n"
+            "WHERE c.risk_score > 0.8\n"
+            "RETURN adv.name AS advisor,\n"
+            "       count(DISTINCT c) AS hrc_clients,\n"
+            "       round(sum(t.amount)) AS total_exposure\n"
+            "ORDER BY total_exposure DESC"
+        ),
+        "cypher_highlight": "**7 lines.** Risk filter is inline. Traversal from advisor to transactions is one readable path.",
+        "viz_cypher_key": "advisor_exposure",
+    },
+]
+
+# ── Graph-as-AI-Context tab constants ─────────────────────────────────────────
+
+_CONTEXT_PRESETS = [
+    {
+        "id":          "alice_risk",
+        "label":       "Is Alice Morgan high-risk?",
+        "route":       "graph-only",
+        "route_label": "Graph-only — live customer record from Neo4j",
+        "cypher": (
+            "MATCH (c:Customer {id:'C001'})-[:OWNS]->(a:Account) "
+            "OPTIONAL MATCH (adv:Advisor)-[:MANAGES]->(c) "
+            "RETURN c.name AS name, round(c.risk_score,2) AS risk_score, "
+            "c.country AS country, collect(a.id) AS accounts, adv.name AS advisor"
+        ),
+        "viz_cypher": (
+            "MATCH (adv:Advisor)-[m:MANAGES]->(c:Customer {id:'C001'})-[o:OWNS]->(a:Account) "
+            "RETURN adv, m, c, o, a"
+        ),
+    },
+    {
+        "id":          "sar_rules",
+        "label":       "What are SAR filing requirements?",
+        "route":       "docs-only",
+        "route_label": "Documents-only — compliance policy library (vector search)",
+        "cypher":      None,
+        "viz_cypher":  None,
+    },
+    {
+        "id":          "sar_alice",
+        "label":       "Should we file a SAR for Alice Morgan?",
+        "route":       "hybrid",
+        "route_label": "Hybrid — graph data + compliance policy documents",
+        "cypher": (
+            "MATCH (c:Customer {id:'C001'})-[:OWNS]->(a1:Account)-[:SENT]->(t:Transaction) "
+            "OPTIONAL MATCH (t)-[:TO]->(a2:Account)<-[:OWNS]-(c2:Customer) "
+            "RETURN c.name AS customer, round(c.risk_score,2) AS risk_score, "
+            "a1.id AS from_account, t.id AS txn_id, round(t.amount,2) AS amount, "
+            "c2.name AS counterparty"
+        ),
+        "viz_cypher": (
+            "MATCH (c:Customer {id:'C001'})-[o:OWNS]->(a:Account)-[s:SENT]->(t:Transaction)"
+            "-[r:TO]->(a2:Account) "
+            "OPTIONAL MATCH (c2:Customer)-[o2:OWNS]->(a2) "
+            "OPTIONAL MATCH (adv:Advisor)-[m:MANAGES]->(c) "
+            "RETURN c, o, a, s, t, r, a2, o2, c2, adv, m"
+        ),
+    },
+]
+
+
+def _tab5_annotate(row: dict) -> list[str]:
+    flags: list[str] = []
+    risk = row.get("risk_score")
+    if risk is not None:
+        try:
+            r = float(risk)
+            if r > 0.9:
+                flags.append("CRITICAL_RISK_CUSTOMER (risk_score > 0.9 → CCO escalation)")
+            elif r > 0.8:
+                flags.append("HIGH_RISK_CUSTOMER (risk_score > 0.8 → EDD required)")
+        except (ValueError, TypeError):
+            pass
+    amount = row.get("amount")
+    if amount is not None:
+        try:
+            if float(amount) > 10_000:
+                flags.append("HIGH_VALUE_TXN (amount > $10,000 → CTR filing threshold)")
+        except (ValueError, TypeError):
+            pass
+    if "account_a" in row and "account_b" in row:
+        flags.append("CIRCULAR_MOVEMENT (A→B→A cycle detected → layering indicator)")
+    return flags
 
 with tab_story:
     st.markdown(
@@ -778,3 +1000,356 @@ with tab_custom:
 
                 except Exception as exc:
                     st.error(f"Error: {exc}")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 4 — Flat vs Graph  (innovation week "aha moment")
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_flatvsgraph:
+    st.markdown(
+        "### Why Knowledge Graphs Beat Flat Tables for Connected Financial Data\n"
+        "Each comparison shows the same fraud detection question answered two ways. "
+        "**Left:** the SQL approach on flat CSVs. **Right:** a live Cypher query against Neo4j. "
+        "The difference in complexity — and what each approach can discover — is the point."
+    )
+
+    comp_labels = [c["title"] for c in _FVG_COMPARISONS]
+    fvg_idx = st.selectbox(
+        "Choose a comparison",
+        range(len(comp_labels)),
+        format_func=lambda i: comp_labels[i],
+        key="fvg_comparison_select",
+    )
+    comp    = _FVG_COMPARISONS[fvg_idx]
+    comp_id = comp["id"]
+
+    st.info(comp["why"], icon="💡")
+    st.divider()
+
+    col_flat, col_graph = st.columns(2, gap="large")
+
+    # ── LEFT: The Flat Data Way ───────────────────────────────────────────────
+    with col_flat:
+        st.markdown("#### The Flat Data Way")
+
+        try:
+            df_customers = pd.read_csv(_DATA_DIR / "customers.csv")
+            df_accounts  = pd.read_csv(_DATA_DIR / "accounts.csv")
+            df_txns      = pd.read_csv(_DATA_DIR / "transactions.csv")
+
+            if comp_id == "circular_flow":
+                acct_filter = ["A002", "A007"]
+                df_flat = df_txns[
+                    df_txns["from_account"].isin(acct_filter) |
+                    df_txns["to_account"].isin(acct_filter)
+                ][["txn_id", "from_account", "to_account", "amount", "timestamp"]].reset_index(drop=True)
+                st.caption("**Raw transaction rows touching accounts A002 / A007:**")
+
+            elif comp_id == "multihop_exposure":
+                df_from = df_accounts.rename(columns={"account_id": "from_account", "customer_id": "cust_from", "account_type": "type_from"})
+                df_to   = df_accounts.rename(columns={"account_id": "to_account",   "customer_id": "cust_to",   "account_type": "type_to"})
+                df_flat = (
+                    df_txns
+                    .merge(df_from, on="from_account")
+                    .merge(df_to,   on="to_account")
+                    [["txn_id", "from_account", "cust_from", "to_account", "cust_to", "amount"]]
+                    .head(10)
+                    .reset_index(drop=True)
+                )
+                st.caption("**Merged rows (transactions + accounts twice — what SQL must JOIN):**")
+
+            else:  # advisor_blast
+                df_advisors = pd.read_csv(_DATA_DIR / "advisors.csv")
+                hrc = df_customers[df_customers["risk_score"] > 0.8][["customer_id", "name", "risk_score"]]
+                df_flat = (
+                    df_advisors.merge(hrc, on="customer_id")
+                    .rename(columns={"name_x": "advisor_name", "name_y": "customer_name"})
+                    [["advisor_id", "advisor_name", "customer_id", "customer_name", "risk_score"]]
+                    .reset_index(drop=True)
+                )
+                st.caption("**High-risk customers per advisor (raw CSV merge):**")
+
+            st.dataframe(df_flat, use_container_width=True)
+
+        except FileNotFoundError as exc:
+            st.warning(f"CSV not found: {exc}. Run `python scripts/generate_data.py` first.")
+
+        st.markdown(f"**{comp['sql_title']}**")
+        st.code(comp["sql"], language="sql")
+        st.error(comp["sql_pain"], icon="⚠️")
+
+    # ── RIGHT: The Graph Way ──────────────────────────────────────────────────
+    with col_graph:
+        st.markdown("#### The Graph Way")
+        st.code(comp["cypher"], language="cypher")
+        st.success(comp["cypher_highlight"])
+
+        res_key = f"fvg_result_{comp_id}"
+
+        if st.button("Run live Cypher query ▶", key=f"fvg_btn_{comp_id}", type="primary"):
+            with st.spinner("Querying Neo4j…"):
+                try:
+                    drv     = build_neo4j_driver(neo4j_uri, neo4j_user, neo4j_pass)
+                    cypher1 = " ".join(comp["cypher"].splitlines())
+                    records = run_cypher(drv, cypher1)
+                    drv.close()
+                    st.session_state[res_key] = {"data": records, "error": None}
+                except Exception as exc:
+                    st.session_state[res_key] = {"data": None, "error": str(exc)}
+
+        cached = st.session_state.get(res_key)
+        if cached:
+            if cached.get("error"):
+                st.error(cached["error"])
+                st.caption("Make sure Neo4j is running (`docker compose up -d`).")
+            elif cached.get("data") is not None:
+                records = cached["data"]
+                if records:
+                    st.dataframe(pd.DataFrame(records), use_container_width=True)
+                    st.caption(f"{len(records)} record(s) returned")
+                else:
+                    st.info("No records returned. Run `python scripts/load_to_neo4j.py` first.")
+
+                viz_q = VIZ_QUERIES.get(comp["viz_cypher_key"])
+                if viz_q:
+                    try:
+                        drv = build_neo4j_driver(neo4j_uri, neo4j_user, neo4j_pass)
+                        net = viz_from_neo4j(drv, viz_q)
+                        drv.close()
+                        if net:
+                            st.markdown(LEGEND_HTML, unsafe_allow_html=True)
+                            render_network(net)
+                    except Exception:
+                        pass
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Tab 5 — Graph as AI Context
+# ══════════════════════════════════════════════════════════════════════════════
+with tab_aicontext:
+    st.markdown(
+        "### How the Knowledge Graph Powers the AI\n"
+        "The AI agent doesn't take natural language and query a database directly. "
+        "It routes your question, runs structured Cypher, annotates every result row "
+        "with ontology flags, and assembles a precise context string for the LLM. "
+        "This tab shows every step of that pipeline — and lets you inspect the exact "
+        "context the LLM receives for three real questions."
+    )
+
+    # ── Section A: Pipeline (static) ─────────────────────────────────────────
+    st.subheader("A — Context Assembly Pipeline")
+    st.caption("How every question travels from user to LLM answer")
+
+    p1, p2, p3, p4, p5 = st.columns(5, gap="small")
+    _pipe_style = "background:#1e2a3a;padding:14px;border-radius:8px;font-size:13px;"
+
+    with p1:
+        st.markdown(
+            f'<div style="{_pipe_style}">'
+            "<b>① Question In</b><br><br>"
+            "User question enters<br>"
+            "the system<br><br>"
+            "↓ Router classifies:<br>"
+            "<code>graph / docs / hybrid</code>"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with p2:
+        st.markdown(
+            f'<div style="{_pipe_style}">'
+            "<b>② Cypher Generated</b><br><br>"
+            "LLM writes a Cypher query<br>"
+            "using the ontology schema<br><br>"
+            "↓ Runs against<br>"
+            "Neo4j live graph"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with p3:
+        st.markdown(
+            f'<div style="{_pipe_style}">'
+            "<b>③ Raw Graph Result</b><br><br>"
+            "Table of rows returned:<br>"
+            "<code>name, risk_score,</code><br>"
+            "<code>accounts, advisor</code><br><br>"
+            "↓ Passed to<br>"
+            "Ontology annotator"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with p4:
+        st.markdown(
+            f'<div style="{_pipe_style}">'
+            "<b>④ Ontology Annotation</b><br><br>"
+            "Each row tagged:<br>"
+            "<code>HIGH_RISK_CUSTOMER</code><br>"
+            "<code>HIGH_VALUE_TXN</code><br>"
+            "<code>CIRCULAR_MOVEMENT</code><br><br>"
+            "↓ Assembled into"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+    with p5:
+        st.markdown(
+            f'<div style="{_pipe_style}">'
+            "<b>⑤ LLM Prompt</b><br><br>"
+            "Annotated rows + doc chunks<br>"
+            "→ context string<br>"
+            "→ LLM generates<br>"
+            "grounded answer"
+            "</div>",
+            unsafe_allow_html=True,
+        )
+
+    st.divider()
+
+    # ── Section B: Live Context Inspector ────────────────────────────────────
+    st.subheader("B — Live Context Inspector")
+    st.markdown(
+        "Pick a preset question and see exactly what the AI sees — "
+        "the raw graph result, the annotated context string, and the network."
+    )
+
+    preset_cols = st.columns(3)
+    for i, preset in enumerate(_CONTEXT_PRESETS):
+        if preset_cols[i].button(
+            preset["label"],
+            key=f"ctx_preset_{preset['id']}",
+            use_container_width=True,
+        ):
+            # Clear cached results so the new preset auto-runs fresh
+            for _p in _CONTEXT_PRESETS:
+                st.session_state.pop(f"ctx_result_{_p['id']}", None)
+                st.session_state.pop(f"ctx_viz_{_p['id']}", None)
+            st.session_state["ctx_selected_id"] = preset["id"]
+
+    selected_id = st.session_state.get("ctx_selected_id")
+    if not selected_id:
+        st.info("Select a question above to inspect the AI context.", icon="👆")
+    else:
+        preset = next(p for p in _CONTEXT_PRESETS if p["id"] == selected_id)
+
+        st.markdown(f"**Question:** _{preset['label']}_")
+        st.caption(f"Route: {preset['route_label']}")
+        st.divider()
+
+        run_ctx_key = f"ctx_result_{preset['id']}"
+        viz_ctx_key = f"ctx_viz_{preset['id']}"
+
+        # Auto-run Cypher and viz when preset is newly selected
+        if run_ctx_key not in st.session_state:
+            with st.spinner("Querying Neo4j…"):
+                if preset["cypher"]:
+                    try:
+                        drv     = build_neo4j_driver(neo4j_uri, neo4j_user, neo4j_pass)
+                        records = run_cypher(drv, preset["cypher"])
+                        drv.close()
+                        st.session_state[run_ctx_key] = {"data": records, "error": None}
+                    except Exception as exc:
+                        st.session_state[run_ctx_key] = {"data": None, "error": str(exc)}
+                else:
+                    st.session_state[run_ctx_key] = {"data": [], "error": None}
+
+        if viz_ctx_key not in st.session_state and preset["viz_cypher"]:
+            try:
+                drv = build_neo4j_driver(neo4j_uri, neo4j_user, neo4j_pass)
+                net = viz_from_neo4j(drv, preset["viz_cypher"])
+                drv.close()
+                st.session_state[viz_ctx_key] = {"net": net, "error": None}
+            except Exception as exc:
+                st.session_state[viz_ctx_key] = {"net": None, "error": str(exc)}
+
+        cached     = st.session_state.get(run_ctx_key, {})
+        viz_cached = st.session_state.get(viz_ctx_key, {})
+
+        col_raw, col_annotated, col_viz = st.columns(3, gap="medium")
+
+        # ── Column 1: Raw graph result ────────────────────────────────────────
+        with col_raw:
+            st.markdown("**③ Raw Graph Result**")
+            if preset["route"] == "docs-only":
+                st.info(
+                    "This question routes to **documents only**. "
+                    "No graph query runs — the LLM receives policy text chunks from "
+                    "vector similarity search instead.",
+                    icon="📄",
+                )
+            elif cached.get("error"):
+                st.error(cached["error"])
+                st.caption("Make sure Neo4j is running (`docker compose up -d`).")
+            else:
+                records = cached.get("data", [])
+                if records:
+                    clean_rows = [
+                        {k: v for k, v in r.items() if k != "_ontology_flags"}
+                        for r in records
+                    ]
+                    df = pd.DataFrame(clean_rows)
+                    for col in df.columns:
+                        if df[col].apply(lambda x: isinstance(x, (list, dict))).any():
+                            df[col] = df[col].apply(
+                                lambda x: ", ".join(str(i) for i in x) if isinstance(x, list) else str(x)
+                            )
+                    st.dataframe(df, use_container_width=True)
+                    st.caption(f"{len(records)} row(s) — plain data, no business meaning yet")
+                else:
+                    st.info("No records. Run `python scripts/load_to_neo4j.py` first.")
+
+        # ── Column 2: Annotated context (what the LLM sees) ──────────────────
+        with col_annotated:
+            st.markdown("**④ What the LLM Sees**")
+            st.caption("Ontology-annotated context assembled for the LLM prompt")
+
+            if preset["route"] == "docs-only":
+                st.markdown(
+                    "For docs-only questions the LLM receives **policy text chunks** "
+                    "retrieved by vector similarity — no graph rows. "
+                    "The ontology system context is always included:\n"
+                )
+                excerpt = "\n".join(ONTOLOGY_CONTEXT.strip().splitlines()[:20])
+                st.code(excerpt + "\n...", language="text")
+
+            elif cached.get("data"):
+                records = cached["data"]
+                annotated_lines: list[str] = []
+                all_flags: list[str] = []
+
+                for r in records[:20]:
+                    flags = _tab5_annotate(r)
+                    all_flags.extend(flags)
+                    clean = {k: v for k, v in r.items() if k != "_ontology_flags"}
+                    line  = str(clean)
+                    if flags:
+                        line += "\n  [ONTOLOGY: " + " | ".join(flags) + "]"
+                    annotated_lines.append(line)
+
+                context_preview = (
+                    "── ONTOLOGY SYSTEM CONTEXT (excerpt) ──\n"
+                    + "\n".join(ONTOLOGY_CONTEXT.strip().splitlines()[:12])
+                    + "\n...\n\n"
+                    + f"── GRAPH DATA ({len(records)} row(s)) ──\n"
+                    + "\n".join(annotated_lines)
+                )
+                st.code(context_preview, language="text")
+
+                if all_flags:
+                    st.markdown("**Ontology flags triggered:**")
+                    for flag in sorted(set(all_flags)):
+                        st.markdown(f"- `{flag}`")
+            else:
+                st.info("No graph data to annotate.")
+
+        # ── Column 3: Network visualization ──────────────────────────────────
+        with col_viz:
+            st.markdown("**Graph Visualization**")
+            if preset["route"] == "docs-only":
+                st.info(
+                    "No network graph for docs-only questions — "
+                    "the knowledge source is the policy document store.",
+                    icon="📚",
+                )
+            elif viz_cached.get("error"):
+                st.warning(f"Visualization unavailable: {viz_cached['error']}")
+            elif viz_cached.get("net"):
+                st.markdown(LEGEND_HTML, unsafe_allow_html=True)
+                render_network(viz_cached["net"])
+            else:
+                st.info("No graph data to visualize.")

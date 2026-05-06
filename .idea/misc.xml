@@ -3,7 +3,7 @@
   <component name="Black">
     <option name="sdkName" value="uv (knowledge-graph-kickstart)" />
   </component>
-  <component name="ProjectRootManager" version="2">
+  <component name="ProjectRootManager" version="2" languageLevel="JDK_24" project-jdk-name="Python 3.12 (knowledge-graphs)" project-jdk-type="Python SDK">
     <output url="file://$PROJECT_DIR$/out" />
   </component>
 </project>
